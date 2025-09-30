@@ -149,9 +149,8 @@ print("\n", dados_bitcoin.head())
 
 # %%
 # Importar estratégias oficiais do projeto
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from experiments.strategies.rules_based.sma_crossover import SMACrossoverStrategy
-from experiments.strategies.rules_based.bollinger_bands_cross import BollingerBandsCrossStrategy
+import SMACrossoverStrategy
+import BollingerBandsCrossStrategy
 
 # Instanciar estratégias
 sma_strategy = SMACrossoverStrategy(asset='bitcoin')
@@ -192,7 +191,7 @@ print(dados_completos[['bitcoin_close', 'sinal_sma', 'sinal_bb']].head())
 
 # %%
 # Importar função oficial de triple barrier
-from experiments.utils.triple_barrier import triple_barrier_label
+import triple_barrier_label
 
 print("🎯 Aplicando triple barrier labels usando implementação oficial...")
 
@@ -276,7 +275,7 @@ def extrair_features_topologicas(dados: pd.DataFrame,
     """
     # Importar função de extração topológica real
     try:
-        import extract_topological_features
+        from experiments.utils.topological_features import extract_topological_features
         print("✅ Usando extração topológica real com ripser")
         usando_real = True
     except ImportError as e:
@@ -287,7 +286,7 @@ def extrair_features_topologicas(dados: pd.DataFrame,
 
         # Tentar novamente após instalação
         try:
-            import extract_topological_features
+            from experiments.utils.topological_features import extract_topological_features
             print("✅ Ripser instalado e topological_features importado com sucesso")
             usando_real = True
         except ImportError:
