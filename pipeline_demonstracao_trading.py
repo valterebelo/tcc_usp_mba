@@ -12,8 +12,10 @@ Artigo: Contexto Importa: Machine Learning Topológico em Estratégias de Tradin
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Dict, List, Tuple
+from typing import Dict, List
 import warnings
+import sys
+import os
 warnings.filterwarnings('ignore')
 
 # %%
@@ -119,7 +121,7 @@ def carregar_dados_bitcoin(n_dias: int = 1000, preco_inicial: float = 50000) -> 
 
     # Gerar volume correlacionado com volatilidade
     volumes = []
-    for i, ret in enumerate(returns):
+    for ret in returns:
         base_volume = 50000
         volume_multiplier = 1 + 5 * abs(ret)  # maior volume em dias voláteis
         volume = base_volume * volume_multiplier * np.random.uniform(0.5, 1.5)
@@ -146,252 +148,93 @@ dados_bitcoin = carregar_dados_bitcoin()
 print("\n", dados_bitcoin.head())
 
 # %%
-def estrategia_sma_crossover(dados: pd.DataFrame, periodo_rapido: int = 10, periodo_lento: int = 30) -> pd.DataFrame:
-    """
-    Implementa estratégia de cruzamento de médias móveis simples.
+# Importar estratégias oficiais do projeto
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from experiments.strategies.rules_based.sma_crossover import SMACrossoverStrategy
+from experiments.strategies.rules_based.bollinger_bands_cross import BollingerBandsCrossStrategy
 
-    Lógica:
-    - Sinal de compra (1): quando SMA rápida > SMA lenta
-    - Sinal de venda (-1): quando SMA rápida < SMA lenta
+# Instanciar estratégias
+sma_strategy = SMACrossoverStrategy(asset='bitcoin')
+bb_strategy = BollingerBandsCrossStrategy(asset='bitcoin')
 
-    Parâmetros:
-    -----------
-    dados : pd.DataFrame
-        Dados com coluna 'bitcoin_close'
-    periodo_rapido : int
-        Período da média móvel rápida
-    periodo_lento : int
-        Período da média móvel lenta
+# Aplicar estratégias usando implementações oficiais
+print("📈 Aplicando estratégia SMA Crossover...")
+dados_com_sma = sma_strategy.calculate_signals(
+    dados_bitcoin,
+    {'fast_period': 10, 'slow_period': 30}
+)
 
-    Retorna:
-    --------
-    pd.DataFrame
-        Dados originais com colunas adicionais de sinais
-    """
-    df = dados.copy()
+print("📊 Aplicando estratégia Bollinger Bands Cross...")
+dados_completos = bb_strategy.calculate_signals(
+    dados_com_sma,
+    {'period': 20, 'std_multiplier': 2.0}
+)
 
-    # Calcular médias móveis
-    df['sma_rapida'] = df['bitcoin_close'].rolling(window=periodo_rapido).mean()
-    df['sma_lenta'] = df['bitcoin_close'].rolling(window=periodo_lento).mean()
+# Renomear colunas para manter compatibilidade com resto do pipeline
+dados_completos = dados_completos.rename(columns={'signal': 'sinal_sma'})
 
-    # Gerar sinais
-    df['sinal_sma'] = np.where(df['sma_rapida'] > df['sma_lenta'], 1, -1)
-
-    # Remover primeiros dias sem sinais válidos
-    df = df.dropna()
-
-    return df
-
-def estrategia_bollinger_bands(dados: pd.DataFrame, periodo: int = 20, desvio_mult: float = 2.0) -> pd.DataFrame:
-    """
-    Implementa estratégia de Bandas de Bollinger.
-
-    Lógica:
-    - Sinal de compra (1): preço cruza banda inferior para cima (oversold)
-    - Sinal de venda (-1): preço cruza banda superior para baixo (overbought)
-    - Manter posição anterior entre cruzamentos
-
-    Parâmetros:
-    -----------
-    dados : pd.DataFrame
-        Dados com coluna 'bitcoin_close'
-    periodo : int
-        Período para média móvel e desvio padrão
-    desvio_mult : float
-        Multiplicador do desvio padrão para as bandas
-
-    Retorna:
-    --------
-    pd.DataFrame
-        Dados originais com colunas adicionais de sinais
-    """
-    df = dados.copy()
-
-    # Calcular bandas de Bollinger
-    df['bb_media'] = df['bitcoin_close'].rolling(window=periodo).mean()
-    df['bb_std'] = df['bitcoin_close'].rolling(window=periodo).std()
-    df['bb_superior'] = df['bb_media'] + (desvio_mult * df['bb_std'])
-    df['bb_inferior'] = df['bb_media'] - (desvio_mult * df['bb_std'])
-
-    # Inicializar sinais
-    df['sinal_bb'] = 0
-
-    # Gerar sinais por cruzamentos
-    for i in range(1, len(df)):
-        preco_anterior = df['bitcoin_close'].iloc[i-1]
-        preco_atual = df['bitcoin_close'].iloc[i]
-        bb_inf_anterior = df['bb_inferior'].iloc[i-1]
-        bb_inf_atual = df['bb_inferior'].iloc[i]
-        bb_sup_anterior = df['bb_superior'].iloc[i-1]
-        bb_sup_atual = df['bb_superior'].iloc[i]
-        sinal_anterior = df['sinal_bb'].iloc[i-1]
-
-        if pd.notna(bb_inf_anterior) and pd.notna(bb_sup_anterior):
-            # Cruzamento para cima da banda inferior (compra)
-            if preco_anterior <= bb_inf_anterior and preco_atual > bb_inf_atual:
-                df.iloc[i, df.columns.get_loc('sinal_bb')] = 1
-            # Cruzamento para baixo da banda superior (venda)
-            elif preco_anterior >= bb_sup_anterior and preco_atual < bb_sup_atual:
-                df.iloc[i, df.columns.get_loc('sinal_bb')] = -1
-            else:
-                # Manter posição anterior
-                df.iloc[i, df.columns.get_loc('sinal_bb')] = sinal_anterior
-
-    # Remover primeiros dias sem sinais válidos
-    df = df.dropna()
-
-    return df
-
-# Aplicar estratégias
-dados_com_sma = estrategia_sma_crossover(dados_bitcoin)
-dados_completos = estrategia_bollinger_bands(dados_com_sma)
+# Agora aplicar BB strategy - precisa ser aplicado ao resultado do SMA
+# Criar sinal_bb a partir do signal retornado pela estratégia BB
+dados_temp = bb_strategy.calculate_signals(dados_completos, {'period': 20, 'std_multiplier': 2.0})
+dados_completos['sinal_bb'] = dados_temp['signal']
 
 # Estatísticas dos sinais
 sma_dist = dados_completos['sinal_sma'].value_counts().to_dict()
 bb_dist = dados_completos['sinal_bb'].value_counts().to_dict()
 
-print(f"📈 Estratégia SMA Crossover aplicada")
+print(f"✅ Estratégia SMA Crossover aplicada")
 print(f"   Distribuição de sinais: {sma_dist}")
-print(f"\n📊 Estratégia Bollinger Bands aplicada")
+print(f"\n✅ Estratégia Bollinger Bands aplicada")
 print(f"   Distribuição de sinais: {bb_dist}")
 
 print(f"\n📋 Dados com estratégias primárias:")
 print(dados_completos[['bitcoin_close', 'sinal_sma', 'sinal_bb']].head())
 
 # %%
-def aplicar_barreiras_triplas(dados: pd.DataFrame,
-                             max_dias: int = 5) -> pd.DataFrame:
-    """
-    Aplica método de barreiras duplas para rotulagem (profit taking e stop loss baseados em 2 desvios padrões dos últimos 30 dias).
+# Importar função oficial de triple barrier
+from experiments.utils.triple_barrier import triple_barrier_label
 
-    Para cada sinal primário, define:
-    - Barreira de lucro: preço de entrada + 2 * std_20d (posição longa) ou -2 * std_20d (posição curta)
-    - Barreira de perda: preço de entrada - 2 * std_20d (posição longa) ou +2 * std_20d (posição curta)
-    - Barreira temporal: max_dias dias
+print("🎯 Aplicando triple barrier labels usando implementação oficial...")
 
-    Rótulos gerados:
-    - 1: barreira de lucro atingida primeiro
-    - 0: barreira de perda atingida primeiro ou barreira temporal
+# Para Bollinger Bands - aplicar labels em TODOS os sinais não-zero
+pontos_entrada_bb = dados_completos[dados_completos['sinal_bb'] != 0].index
+print(f"   Pontos de entrada Bollinger Bands: {len(pontos_entrada_bb)}")
 
-    Parâmetros:
-    -----------
-    dados : pd.DataFrame
-        Dados com sinais primários
-    max_dias : int
-        Máximo de dias para manter posição
+# Aplicar triple barrier labels usando a função oficial
+barrier_results = triple_barrier_label(
+    prices=dados_completos['bitcoin_close'],
+    events=pontos_entrada_bb,  # Todos os pontos com sinal não-zero
+    signals=dados_completos.loc[pontos_entrada_bb, 'sinal_bb'],  # Sinais correspondentes
+    volatility_span=20,
+    time_barrier_days=5,
+    upper_barrier_mult=2.0,  # 2 desvios padrões
+    lower_barrier_mult=2.0,  # 2 desvios padrões
+    min_pct_move=None
+)
 
-    Retorna:
-    --------
-    pd.DataFrame
-        Dados com rótulos de barreiras duplas
-    """
-    df = dados.copy()
-    df['rotulo_barreira'] = np.nan
-    df['dias_ate_barreira'] = np.nan
-    df['tipo_barreira'] = ''  # 'lucro', 'perda', 'tempo'
+# Criar DataFrame com rótulos
+dados_com_rotulos = dados_completos.copy()
+dados_com_rotulos['rotulo_barreira'] = np.nan
+dados_com_rotulos['tipo_barreira'] = ''
+dados_com_rotulos['dias_ate_barreira'] = np.nan
+dados_com_rotulos['volatilidade_barreira'] = np.nan
 
-    # Calcular desvio padrão móvel de 30 dias
-    df['std_20d'] = df['bitcoin_close'].rolling(window=20, min_periods=1).std()
-
-    # Aplicar labels para TODOS os pontos com sinal não-zero (como em triple_barrier.py)
-    # Usar sinal_bb como estratégia principal para demonstração
-    pontos_entrada = df[df['sinal_bb'] != 0].index
-
-    for entrada in pontos_entrada:
-        if entrada == df.index[-1]:  # Último ponto, sem dados futuros
-            continue
-
-        try:
-            entrada_idx = df.index.get_loc(entrada)
-            sinal = df.loc[entrada, 'sinal_bb']
-            preco_entrada = df.loc[entrada, 'bitcoin_close']
-            std_entrada = df.loc[entrada, 'std_20d']
-
-            # Definir barreiras com base em 2 desvios padrões
-            if sinal == 1:  # Posição longa
-                barreira_lucro = preco_entrada + 2 * std_entrada
-                barreira_perda = preco_entrada - 2 * std_entrada
-            else:  # Posição curta
-                barreira_lucro = preco_entrada - 2 * std_entrada
-                barreira_perda = preco_entrada + 2 * std_entrada
-
-            # Examinar dias seguintes
-            fim_janela = min(entrada_idx + max_dias, len(df) - 1)
-            janela_futura = df.iloc[entrada_idx+1:fim_janela+1]
-
-            rotulo_encontrado = False
-
-            for i, (data_futura, linha_futura) in enumerate(janela_futura.iterrows()):
-                preco_futuro = linha_futura['bitcoin_close']
-                dias_decorridos = i + 1
-
-                if sinal == 1:  # Posição longa
-                    if preco_futuro >= barreira_lucro:
-                        # Barreira de lucro atingida
-                        df.loc[entrada, 'rotulo_barreira'] = 1
-                        df.loc[entrada, 'dias_ate_barreira'] = dias_decorridos
-                        df.loc[entrada, 'tipo_barreira'] = 'lucro'
-                        rotulo_encontrado = True
-                        break
-                    elif preco_futuro <= barreira_perda:
-                        # Barreira de perda atingida
-                        df.loc[entrada, 'rotulo_barreira'] = 0
-                        df.loc[entrada, 'dias_ate_barreira'] = dias_decorridos
-                        df.loc[entrada, 'tipo_barreira'] = 'perda'
-                        rotulo_encontrado = True
-                        break
-                else:  # Posição curta
-                    if preco_futuro <= barreira_lucro:
-                        # Barreira de lucro atingida (preço caiu)
-                        df.loc[entrada, 'rotulo_barreira'] = 1
-                        df.loc[entrada, 'dias_ate_barreira'] = dias_decorridos
-                        df.loc[entrada, 'tipo_barreira'] = 'lucro'
-                        rotulo_encontrado = True
-                        break
-                    elif preco_futuro >= barreira_perda:
-                        # Barreira de perda atingida (preço subiu)
-                        df.loc[entrada, 'rotulo_barreira'] = 0
-                        df.loc[entrada, 'dias_ate_barreira'] = dias_decorridos
-                        df.loc[entrada, 'tipo_barreira'] = 'perda'
-                        rotulo_encontrado = True
-                        break
-
-            # Se nenhuma barreira foi atingida, é barreira temporal
-            # Label baseado no sinal do retorno ao fim do horizonte
-            if not rotulo_encontrado:
-                # Pegar o preço no fim da janela (ou último preço disponível)
-                fim_idx = min(entrada_idx + max_dias, len(df) - 1)
-                preco_final = df.iloc[fim_idx]['bitcoin_close']
-
-                # Calcular retorno
-                retorno_final = (preco_final - preco_entrada) / preco_entrada
-
-                # Label baseado na direção do retorno e do sinal
-                if sinal == 1:  # Posição longa
-                    df.loc[entrada, 'rotulo_barreira'] = 1 if retorno_final > 0 else 0
-                else:  # Posição curta
-                    df.loc[entrada, 'rotulo_barreira'] = 1 if retorno_final < 0 else 0
-
-                df.loc[entrada, 'dias_ate_barreira'] = max_dias
-                df.loc[entrada, 'tipo_barreira'] = 'tempo'
-
-        except Exception as e:
-            continue
-
-    # Remove coluna auxiliar
-    df.drop(columns=['std_20d'], inplace=True)
-
-    return df
-
-# Aplicar barreiras triplas (na verdade, duplas: profit/stop, temporal é 0)
-dados_com_rotulos = aplicar_barreiras_triplas(dados_completos)
+# Preencher com os resultados do triple barrier
+for idx in barrier_results.index:
+    if idx in dados_com_rotulos.index:
+        dados_com_rotulos.loc[idx, 'rotulo_barreira'] = barrier_results.loc[idx, 'label']
+        dados_com_rotulos.loc[idx, 'tipo_barreira'] = barrier_results.loc[idx, 'barrier_touched']
+        dados_com_rotulos.loc[idx, 'dias_ate_barreira'] = barrier_results.loc[idx, 'days_to_barrier']
+        dados_com_rotulos.loc[idx, 'volatilidade_barreira'] = barrier_results.loc[idx, 'volatility']
 
 # Estatísticas dos rótulos
 rotulos_validos = dados_com_rotulos['rotulo_barreira'].dropna()
 dist_rotulos = rotulos_validos.value_counts().to_dict()
-tipos_barreira = dados_com_rotulos['tipo_barreira'].value_counts().to_dict()
+# Filtrar apenas tipos não vazios
+tipos_barreira_series = dados_com_rotulos[dados_com_rotulos['tipo_barreira'] != '']['tipo_barreira']
+tipos_barreira = tipos_barreira_series.value_counts().to_dict() if len(tipos_barreira_series) > 0 else {}
 
-print(f"🎯 Barreiras baseadas em 2 desvios padrões aplicadas")
+print(f"\n📊 Estatísticas dos rótulos:")
 print(f"   Total de pontos de entrada analisados: {len(rotulos_validos)}")
 print(f"   Distribuição de rótulos: {dist_rotulos}")
 print(f"   Tipos de barreira atingida: {tipos_barreira}")
@@ -402,18 +245,18 @@ colunas_relevantes = ['bitcoin_close', 'sinal_sma', 'sinal_bb', 'rotulo_barreira
 print(dados_com_rotulos[colunas_relevantes].head())
 
 # %%
-def extrair_features_topologicas_simplificadas(dados: pd.DataFrame,
-                                              janela: int = 50,
-                                              delay: int = 3,
-                                              dimensao_emb: int = 3) -> pd.DataFrame:
+def extrair_features_topologicas(dados: pd.DataFrame,
+                                       janela: int = 50,
+                                       tau: int = 3,
+                                       dimensao_emb: int = 3) -> pd.DataFrame:
     """
-    Extrai features topológicas simplificadas das barras de persistência.
+    Extrai features topológicas reais usando homologia persistente.
 
-    Processo:
+    Utiliza a biblioteca topological_features para computar:
     1. Time-delay embedding da série de preços
     2. Computação de homologia persistente (H0 e H1)
     3. Análise das barras de persistência
-    4. Extração de features estatísticas
+    4. Extração de features estatísticas (Betti numbers, lifetimes, entropias, etc.)
 
     Parâmetros:
     -----------
@@ -421,8 +264,8 @@ def extrair_features_topologicas_simplificadas(dados: pd.DataFrame,
         Dados com coluna 'bitcoin_close'
     janela : int
         Tamanho da janela deslizante para análise
-    delay : int
-        Delay para time-embedding
+    tau : int
+        Time delay para embedding
     dimensao_emb : int
         Dimensão do embedding
 
@@ -431,60 +274,79 @@ def extrair_features_topologicas_simplificadas(dados: pd.DataFrame,
     pd.DataFrame
         Dados originais com features topológicas adicionadas
     """
-    df = dados.copy()
+    # Importar função de extração topológica real
+    try:
+        import extract_topological_features
+        print("✅ Usando extração topológica real com ripser")
+        usando_real = True
+    except ImportError as e:
+        print(f"⚠️  Erro ao importar topological_features: {e}")
+        print("   Instalando ripser...")
+        import subprocess
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "ripser"])
 
-    # Simular features topológicas realistas
-    # Em implementação real, usaria bibliotecas como gudhi ou dionysus
-    np.random.seed(42)
+        # Tentar novamente após instalação
+        try:
+            import extract_topological_features
+            print("✅ Ripser instalado e topological_features importado com sucesso")
+            usando_real = True
+        except ImportError:
+            print("❌ Falha ao importar. Usando fallback simplificado.")
+            usando_real = False
 
-    features_topo = {}
+    if usando_real:
+        # Usar extração topológica real
+        features_df = extract_topological_features(
+            data=dados,
+            window_length=janela,
+            selected_cols=['bitcoin_close'],
+            tau=tau,
+            embedding_dim=dimensao_emb,
+            max_dimension=1  # H0 e H1
+        )
 
-    for i in range(janela, len(df)):
-        # Janela de preços para análise
-        janela_precos = df['bitcoin_close'].iloc[i-janela:i].values
+        # Adicionar prefixo consistente com o resto do código
+        features_df = features_df.add_prefix('bitcoin_close_topo_')
 
-        # Simular time-delay embedding
-        precos_norm = (janela_precos - janela_precos.mean()) / janela_precos.std()
+        # Fazer merge com dados originais
+        df_final = dados.merge(features_df, left_index=True, right_index=True, how='left')
 
-        # Simular análise de homologia persistente
-        # H0 - componentes conectados (estrutura de mercado)
-        volatilidade_local = np.std(precos_norm[-10:])  # volatilidade recente
+        print(f"   Features topológicas reais extraídas: {len(features_df.columns)} features")
+        print(f"   Janelas processadas: {len(features_df)}")
 
-        # H1 - ciclos (padrões cíclicos)
-        autocorr_lag1 = np.corrcoef(precos_norm[:-1], precos_norm[1:])[0,1]
+    else:
+        # Fallback: gerar features sintéticas similares às reais
+        print("⚠️  Usando features topológicas sintéticas (fallback)")
+        df = dados.copy()
+        np.random.seed(42)
 
-        # Features H0 (dimensão 0)
-        betti_0 = max(1, int(5 * volatilidade_local + np.random.normal(0, 0.5)))
-        lifetime_max_h0 = volatilidade_local * 10 + np.random.normal(0, 1)
-        entropia_h0 = -np.sum([0.3, 0.4, 0.3] * np.log([0.3, 0.4, 0.3]))  # entropia simulada
-        wasserstein_h0 = abs(autocorr_lag1) + np.random.normal(0, 0.1)
+        features_topo = {}
+        for i in range(janela, len(df)):
+            janela_precos = df['bitcoin_close'].iloc[i-janela:i].values
+            precos_norm = (janela_precos - janela_precos.mean()) / (janela_precos.std() + 1e-8)
+            volatilidade_local = np.std(precos_norm[-10:])
 
-        # Features H1 (dimensão 1)
-        betti_1 = max(0, int(3 * abs(autocorr_lag1) + np.random.normal(0, 0.3)))
-        lifetime_max_h1 = abs(autocorr_lag1) * 5 + np.random.normal(0, 0.5)
-        entropia_h1 = abs(autocorr_lag1) * 2 + np.random.normal(0, 0.2)
-        wasserstein_h1 = volatilidade_local * abs(autocorr_lag1) + np.random.normal(0, 0.05)
+            data_atual = df.index[i]
+            features_topo[data_atual] = {
+                # H0 features (componentes conectados)
+                'bitcoin_close_topo_betti_0': max(1, int(3 * volatilidade_local)),
+                'bitcoin_close_topo_max_hole_lifetime_0': volatilidade_local * 5,
+                'bitcoin_close_topo_persistence_entropy_0': -volatilidade_local * np.log(volatilidade_local + 0.1),
+                'bitcoin_close_topo_wasserstein_0': volatilidade_local * 2,
+                # H1 features (ciclos)
+                'bitcoin_close_topo_betti_1': max(0, int(2 * volatilidade_local)),
+                'bitcoin_close_topo_max_hole_lifetime_1': volatilidade_local * 3,
+                'bitcoin_close_topo_persistence_entropy_1': volatilidade_local * 1.5,
+                'bitcoin_close_topo_wasserstein_1': volatilidade_local * 1.2
+            }
 
-        data_atual = df.index[i]
-        features_topo[data_atual] = {
-            'bitcoin_close_topo_betti_0': betti_0,
-            'bitcoin_close_topo_max_hole_lifetime_0': max(0, lifetime_max_h0),
-            'bitcoin_close_topo_persistence_entropy_0': max(0, entropia_h0),
-            'bitcoin_close_topo_wasserstein_0': max(0, wasserstein_h0),
-            'bitcoin_close_topo_betti_1': betti_1,
-            'bitcoin_close_topo_max_hole_lifetime_1': max(0, lifetime_max_h1),
-            'bitcoin_close_topo_persistence_entropy_1': max(0, entropia_h1),
-            'bitcoin_close_topo_wasserstein_1': max(0, wasserstein_h1)
-        }
-
-    # Converter para DataFrame e fazer merge
-    features_df = pd.DataFrame.from_dict(features_topo, orient='index')
-    df_final = df.merge(features_df, left_index=True, right_index=True, how='left')
+        features_df = pd.DataFrame.from_dict(features_topo, orient='index')
+        df_final = df.merge(features_df, left_index=True, right_index=True, how='left')
 
     return df_final
 
 # Extrair features topológicas
-dados_finais = extrair_features_topologicas_simplificadas(dados_com_rotulos)
+dados_finais = extrair_features_topologicas(dados_com_rotulos)
 
 # Identificar colunas topológicas
 features_topologicas = [col for col in dados_finais.columns if '_topo_' in col]
@@ -545,12 +407,17 @@ def treinar_meta_modelo(dados: pd.DataFrame,
     X_treino, X_teste = X.iloc[:split_idx], X.iloc[split_idx:]
     y_treino, y_teste = y_binario.iloc[:split_idx], y_binario.iloc[split_idx:]
 
-    # Simular treinamento CatBoost (em implementação real usaria catboost)
-    # Para demonstração, usar modelo simples
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.metrics import accuracy_score, log_loss, classification_report
+    # Treinar modelo CatBoost toy (simplificado para demonstração)
+    from catboost import CatBoostClassifier
+    from sklearn.metrics import accuracy_score, log_loss
 
-    modelo = RandomForestClassifier(n_estimators=100, random_state=42, max_depth=6)
+    modelo = CatBoostClassifier(
+        iterations=50,        # Baixo número para demonstração rápida
+        depth=4,              # Árvore rasa
+        learning_rate=0.1,
+        verbose=False,
+        random_state=42
+    )
     modelo.fit(X_treino, y_treino)
 
     # Predições
@@ -602,14 +469,14 @@ print(f"   Acurácia teste: {resultado_meta_bb['metricas']['acuracia_teste']:.3f
 print(f"   Log-loss teste: {resultado_meta_bb['metricas']['log_loss_teste']:.3f}")
 
 print(f"\n🎯 Top 5 features mais importantes (SMA):")
-for i, (feature, importancia) in enumerate(resultado_meta_sma['importancia_features'][:5]):
+for idx, (feature, importancia) in enumerate(resultado_meta_sma['importancia_features'][:5], 1):
     feature_nome = feature.replace('bitcoin_close_topo_', '').replace('_', ' ')
-    print(f"   {i+1}. {feature_nome}: {importancia:.3f}")
+    print(f"   {idx}. {feature_nome}: {importancia:.3f}")
 
 print(f"\n🎯 Top 5 features mais importantes (Bollinger):")
-for i, (feature, importancia) in enumerate(resultado_meta_bb['importancia_features'][:5]):
+for idx, (feature, importancia) in enumerate(resultado_meta_bb['importancia_features'][:5], 1):
     feature_nome = feature.replace('bitcoin_close_topo_', '').replace('_', ' ')
-    print(f"   {i+1}. {feature_nome}: {importancia:.3f}")
+    print(f"   {idx}. {feature_nome}: {importancia:.3f}")
 
 # %%
 def calcular_metricas_estrategia(dados: pd.DataFrame,
@@ -721,7 +588,7 @@ def plotar_resultados_finais(dados_original: pd.DataFrame,
     )
 
     # Criar gráficos 2x2
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 10))
+    _, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 10))
 
     # === GRÁFICOS DE TREINO (coluna esquerda) ===
 
